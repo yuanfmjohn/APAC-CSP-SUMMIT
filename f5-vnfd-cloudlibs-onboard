@@ -1,0 +1,137 @@
+tosca_definitions_version: tosca_simple_profile_for_nfv_1_0_0
+
+description: F5 VNF Descriptor 
+
+metadata:
+  template_name: f5-cloud-libs-onboard-vnfd
+
+topology_template:
+  node_templates:
+    VDU1:
+      type: tosca.nodes.nfv.VDU.Tacker
+      capabilities:
+        nfv_compute:
+          properties:
+            mem_page_size: large
+            cpu_allocation: 
+              cpu_affinity: dedicated
+              thread_allocation: isolate
+      properties:
+        image: BIG-IP-v13.1
+        flavor: f5.1slotall
+        availability_zone: nova
+        mgmt_driver: noop
+        user_data_format: RAW
+        user_data: |
+          #!/bin/bash
+          checks=1
+          while [ $checks -lt 120 ];
+          do echo checking mcpd
+          if tmsh -a show sys mcp-state field-fmt | grep -q running;
+          then echo mcpd ready
+          break
+          fi
+          echo mcpd not ready yet
+          let checks=checks+1
+          sleep 10
+          done
+          mgmt_ip=$(ip addr | grep mgmt: -A2 | grep inet | awk '{print $2}' | awk -F "/" '{print $1}')
+          mkdir -p /config/cloud/f5-cloud-libs
+          curl -o /config/cloud/f5-cloud-libs.tar.gz --silent --fail --retry 10 -L https://github.com/F5Networks/f5-cloud-libs/archive/v3.5.0.tar.gz
+          tar zxvf /config/cloud/f5-cloud-libs.tar.gz --strip 1 -C /config/cloud/f5-cloud-libs
+          cd /config/cloud/f5-cloud-libs
+          npm install --production
+          sleep 5
+          f5-rest-node /config/cloud/f5-cloud-libs/scripts/onboard.js -o /var/log/onboard.log --no-reboot --host $mgmt_ip --user admin --password admin --set-root-password old:default,new:root --update-user user:admin,password:admin --ntp 0.jp.pool.ntp.org --tz Asia/Shanghai --dns 8.8.8.8 --module ltm:nominal --license-pool --big-iq-host 10.0.0.60 --big-iq-user admin --big-iq-password admin --license-pool-name ve-pool
+          f5-rest-node /config/cloud/f5-cloud-libs/scripts/network.js -o /var/log/onboard-network.log --host $mgmt_ip --user admin --password admin --vlan name:vlan_ha,nic:1.1 --self-ip name:self_ha,address:192.168.177.110/24,vlan:vlan_ha --vlan name:vlan_in,nic:1.2 --self-ip name:self_in,address:192.168.125.110/24,vlan:vlan_in --vlan name:vlan_out,nic:1.3 --self-ip name:self_out,address:192.168.152.110/24,vlan:vlan_out --route name:default_gw,gw:192.168.152.1,network:0.0.0.0/0
+        config: |
+          param0: key1
+          param1: key2
+        monitoring_policy:
+          name: ping
+          parameters:
+            monitoring_delay: 30
+            count: 3
+            interval: 8
+            timeout: 2 
+            actions:
+              failure: respawn
+            retry: 8
+            port: 22
+
+    CP1:
+      type: tosca.nodes.nfv.CP.Tacker
+      properties:
+        management: true
+        type: vnic
+        order: 0
+        security_groups:
+          - default
+      requirements:
+        - virtualLink:
+            node: VL1
+        - virtualBinding:
+            node: VDU1
+
+    CP2:
+      type: tosca.nodes.nfv.CP.Tacker
+      properties:
+        type: vnic
+        order: 1
+        security_groups:
+          - default
+      requirements:
+        - virtualLink:
+            node: VL2
+        - virtualBinding:
+            node: VDU1
+
+    CP3:
+      type: tosca.nodes.nfv.CP.Tacker
+      properties:
+        type: vnic
+        order: 2
+        security_groups:
+          - default
+      requirements:
+        - virtualLink:
+            node: VL3
+        - virtualBinding:
+            node: VDU1
+
+    CP4:
+      type: tosca.nodes.nfv.CP.Tacker
+      properties:
+        type: vnic
+        order: 4
+        security_groups:
+          - default
+      requirements:
+        - virtualLink:
+            node: VL4
+        - virtualBinding:
+            node: VDU1
+
+    VL1:
+      type: tosca.nodes.nfv.VL
+      properties:
+        network_name: extmgmt
+        vendor: F5
+
+    VL2:
+      type: tosca.nodes.nfv.VL
+      properties:
+        network_name: net_ha
+        vendor: F5
+
+    VL3: 
+      type: tosca.nodes.nfv.VL
+      properties:
+        network_name: net_in
+        vendor: F5 
+
+    VL4:
+      type: tosca.nodes.nfv.VL
+      properties:
+        network_name: net_out
+        vendor: F5
